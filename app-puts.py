@@ -18,7 +18,7 @@ def get_bearer_token(username, password):
     return resp.json()["token"]
 
 def get_all_puts(token):
-    url = f"{BASE_URL}/puts"
+    url = f"{BASE_URL}/puts?status=0&limit=1000"
     headers = {"Authorization": f"Bearer {token}"}
     resp = requests.get(url, headers=headers)
     resp.raise_for_status()
