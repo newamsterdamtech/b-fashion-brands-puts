@@ -6,7 +6,7 @@ import io
 import tempfile
 import os
 
-BASE_URL = "https://test.buurfashion.itsperfect.it/api/v3"
+BASE_URL = "https://buurfashion.itsperfect.it/api/v3"
 
 # --- Helper Functions ---
 
