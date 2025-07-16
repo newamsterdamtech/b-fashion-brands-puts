@@ -3,10 +3,10 @@ import requests
 import csv
 import pandas as pd
 import io
-import tempfile
-import os
+import time
 
 BASE_URL = "https://buurfashion.itsperfect.it/api/v3"
+MAX_RATE_LIMIT_SLEEP = 10
 
 # --- Helper Functions ---
 
@@ -15,62 +15,128 @@ def get_bearer_token(username, password):
     data = {"username": username, "password": password}
     resp = requests.post(url, json=data)
     resp.raise_for_status()
-    return resp.json()["token"]
+    resp_data = resp.json()
+    token = resp_data["token"]
+    expires_in = resp_data.get("expires_in", 1740)
+    expiry_timestamp = time.time() + expires_in - 60
+    return token, expiry_timestamp
 
-def get_all_puts(token):
+def ensure_valid_token():
+    if (
+        "token" not in st.session_state or
+        "token_expiry" not in st.session_state or
+        time.time() > st.session_state["token_expiry"]
+    ):
+        username = st.session_state["username"]
+        password = st.session_state["password"]
+        token, expiry = get_bearer_token(username, password)
+        st.session_state["token"] = token
+        st.session_state["token_expiry"] = expiry
+    return st.session_state["token"]
+
+def handle_rate_limits(resp):
+    bucket_size = int(resp.headers.get("X-Bucket-Size", 100))
+    marbles = int(resp.headers.get("X-Marbles-In-Bucket", 0))
+    remaining = int(resp.headers.get("X-Remaining-Requests", bucket_size))
+    if marbles >= bucket_size - 2 or remaining <= 2:
+        calculated_wait = (marbles - remaining + 2) * 4
+        wait_time = min(max(calculated_wait, 1), MAX_RATE_LIMIT_SLEEP)
+        print(f"[handle_rate_limits] Bucket full/near. Sleeping {wait_time}s (calculated {calculated_wait}s).")
+        time.sleep(wait_time)
+    return
+
+def safe_get(url, headers, params=None, log_text=None):
+    while True:
+        print(f"[safe_get] Making API call: {url} params={params}")
+        resp = requests.get(url, headers=headers, params=params)
+        if resp.status_code == 429:
+            print("[safe_get] 429 received. Sleeping 3 seconds before retry.")
+            time.sleep(3)
+            continue
+        handle_rate_limits(resp)
+        return resp
+
+def normalize_item_number(x):
+    s = str(x).strip()
+    if s.endswith('.0'):
+        s = s[:-2]
+    return s.zfill(7) if s.isdigit() else s
+
+def normalize_kleurnummer(kleurnummer):
+    kleurnummer_str = str(kleurnummer).strip()
+    if kleurnummer_str.endswith('.0'):
+        kleurnummer_str = kleurnummer_str[:-2]
+    if kleurnummer_str.isdigit():
+        return kleurnummer_str.zfill(3 if len(kleurnummer_str) <= 2 else 4)
+    return kleurnummer_str
+
+def get_all_puts():
+    token = ensure_valid_token()
     url = f"{BASE_URL}/puts?status=0&limit=1000"
     headers = {"Authorization": f"Bearer {token}"}
-    resp = requests.get(url, headers=headers)
+    resp = safe_get(url, headers, log_text="[GET] /puts?status=0&limit=1000")
     resp.raise_for_status()
-    return resp.json()
+    data = resp.json()
+    put_ids = [put["id"] for put in data if "id" in put]
+    return put_ids
 
-def get_put_lines(token, put_id):
+def get_put_lines(put_id):
+    token = ensure_valid_token()
     url = f"{BASE_URL}/puts/{put_id}/lines"
     headers = {"Authorization": f"Bearer {token}"}
-    resp = requests.get(url, headers=headers)
+    resp = safe_get(url, headers, log_text=f"[GET] /puts/{put_id}/lines")
     resp.raise_for_status()
     return resp.json()
 
 def fetch_put_lines_csv(username, password):
-    token = get_bearer_token(username, password)
-    puts = get_all_puts(token)
-    put_ids = [put["id"] for put in puts]
+    st.session_state["username"] = username
+    st.session_state["password"] = password
+
+    put_ids = get_all_puts()
 
     csv_buffer = io.StringIO()
     writer = csv.writer(csv_buffer)
     writer.writerow(["put_id", "line_id", "item_number", "color_number"])
-    for put_id in put_ids:
-        lines = get_put_lines(token, put_id)
+    n_puts = len(put_ids)
+    progress = st.progress(0)
+    for idx, put_id in enumerate(put_ids):
+        log_msg = f"Processing PUT {idx+1}/{n_puts} (PUT ID: {put_id})"
+        print(log_msg)
+        lines = get_put_lines(put_id)
         for line in lines:
+            item = line.get("item") or {}
+            color = line.get("color") or {}
             line_id = line.get("id")
-            item_number = (line.get("item") or {}).get("item_number", "")
-            color_number = (line.get("color") or {}).get("color_number", "")
-            writer.writerow([put_id, line_id, item_number, color_number])
+            item_number = str(item.get("item_number", "")).strip()
+            color_number = str(color.get("color_number", "")).strip()
+            writer.writerow([
+                put_id, line_id, normalize_item_number(item_number), normalize_kleurnummer(color_number)
+            ])
+        progress.progress((idx + 1) / n_puts)
     csv_buffer.seek(0)
     return csv_buffer
 
 def merge_put_lines_to_excel(excel_file, csv_buffer):
-    # Read files into DataFrames
     df_excel = pd.read_excel(excel_file)
     df_csv = pd.read_csv(csv_buffer)
-    
-    # Standardize column names
     df_excel.columns = [c.strip() for c in df_excel.columns]
     df_csv.columns = [c.strip() for c in df_csv.columns]
-    
-    # Mapping for quick lookup: (item_number, color_number) -> line_id
-    mapping = {
-        (str(row['item_number']), str(row['color_number'])): str(row['line_id'])
-        for _, row in df_csv.iterrows()
-    }
-    # Function to fill in the PUT column
+    df_csv['item_number'] = df_csv['item_number'].apply(normalize_item_number)
+    df_csv['color_number'] = df_csv['color_number'].apply(normalize_kleurnummer)
+    df_excel['Artikelnummer'] = df_excel['Artikelnummer'].apply(normalize_item_number)
+    df_excel['Kleurnummer'] = df_excel['Kleurnummer'].apply(normalize_kleurnummer)
+    # Map (item_number, color_number) -> put_id
+    mapping = {}
+    for _, row in df_csv.iterrows():
+        key = (str(row['item_number']), str(row['color_number']))
+        if key not in mapping:
+            mapping[key] = str(row['put_id'])
     def fill_put(row):
-        if pd.isna(row['PUT']) or str(row['PUT']).strip() == "":
+        if 'PUT' not in row or pd.isna(row['PUT']) or str(row['PUT']).strip() == "":
             key = (str(row['Artikelnummer']).strip(), str(row['Kleurnummer']).strip())
             return mapping.get(key, "")
         else:
             return row['PUT']
-    
     df_excel['PUT'] = df_excel.apply(fill_put, axis=1)
     return df_excel
 
@@ -99,10 +165,7 @@ st.markdown(
         </svg>
     </div>
     """,
-    unsafe_allow_html=True
-)
-
-st.title("Fetch PUT Lines and Merge to 'Check Bas' Excel File")
+    unsafe_allow_html=True)
 
 # Step 1: Login and fetch PUT lines as CSV
 st.header("Step 1: Login to fetch PUT lines")
@@ -118,6 +181,13 @@ if submitted:
             csv_buffer = fetch_put_lines_csv(username, password)
             st.success("PUT lines fetched successfully! Proceed to upload your 'Check Bas' Excel file.")
             st.session_state['csv_buffer'] = csv_buffer.getvalue()
+            # ---- DOWNLOAD BUTTON FOR CSV BUFFER ----
+            st.download_button(
+                label="Download PUT lines as CSV",
+                data=st.session_state['csv_buffer'],
+                file_name="put_lines.csv",
+                mime="text/csv"
+            )
     except Exception as e:
         st.error(f"Error: {e}")
 
@@ -127,14 +197,12 @@ st.header("Step 2: Upload and update your 'Check Bas' Excel file")
 if 'csv_buffer' in st.session_state:
     excel_file = st.file_uploader("Upload 'Check Bas' Excel (.xlsx)", type=["xlsx"])
     if excel_file:
-        # Convert session_state CSV back to buffer
         csv_buffer = io.StringIO(st.session_state['csv_buffer'])
         try:
             with st.spinner("Processing Excel file..."):
                 df_updated = merge_put_lines_to_excel(excel_file, csv_buffer)
             st.success("Excel updated! Download your file below.")
             st.dataframe(df_updated.head())
-            # Download link
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df_updated.to_excel(writer, index=False)
@@ -149,4 +217,3 @@ if 'csv_buffer' in st.session_state:
             st.error(f"Error updating Excel file: {e}")
 else:
     st.info("First fetch the PUT lines by logging in above.")
-
