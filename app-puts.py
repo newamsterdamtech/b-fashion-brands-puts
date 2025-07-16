@@ -169,7 +169,7 @@ st.markdown(
 
 st.title("B Fashion Brands Puts Updater")
 
-# Step 1: Login and fetch PUT lines as CSV
+# Stap 1: Login en fetch PUT lines as CSV
 st.header("Step 1: Login to fetch PUT lines")
 with st.form("auth_form"):
     username = st.text_input("Username")
@@ -193,7 +193,7 @@ if submitted:
     except Exception as e:
         st.error(f"Error: {e}")
 
-# Step 2: Upload Excel and merge
+# Stap 2: Upload Excel en merge
 st.header("Step 2: Upload and update your 'Check Bas' Excel file")
 
 if 'csv_buffer' in st.session_state:
