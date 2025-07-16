@@ -167,7 +167,7 @@ st.markdown(
     """,
     unsafe_allow_html=True)
 
-st.title("B Fashion Brands Puts Updater (Stap 1: Lookup → Stap 2: Merge)")
+st.title("B Fashion Brands Puts Updater")
 
 # Step 1: Login and fetch PUT lines as CSV
 st.header("Step 1: Login to fetch PUT lines")
