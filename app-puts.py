@@ -97,7 +97,7 @@ def get_all_puts():
 
 def get_put_lines(put_id):
     token = ensure_valid_token()
-    url = f"{BASE_URL}/puts/{put_id}/lines"
+    url = f"{BASE_URL}/puts/{put_id}/lines?limit=1000"
     headers = {"Authorization": f"Bearer {token}"}
     resp = safe_get(url, headers, log_text=f"[GET] /puts/{put_id}/lines")
     resp.raise_for_status()
