@@ -72,13 +72,28 @@ def normalize_kleurnummer(kleurnummer):
 
 def get_all_puts():
     token = ensure_valid_token()
-    url = f"{BASE_URL}/puts?status=0&limit=1000"
-    headers = {"Authorization": f"Bearer {token}"}
-    resp = safe_get(url, headers, log_text="[GET] /puts?status=0&limit=1000")
-    resp.raise_for_status()
-    data = resp.json()
-    put_ids = [put["id"] for put in data if "id" in put]
+    put_ids = []
+    current_page = 1
+    while True:
+        url = f"{BASE_URL}/puts?status=0&limit=1000&page={current_page}"
+        headers = {"Authorization": f"Bearer {token}"}
+        resp = safe_get(url, headers, log_text=f"[GET] /puts?status=0&limit=1000&page={current_page}")
+        resp.raise_for_status()
+        data = resp.json()
+        put_ids.extend([put["id"] for put in data if "id" in put])
+
+        # Handle pagination via response headers
+        try:
+            current = int(resp.headers.get('X-Pagination-Current-Page', current_page))
+            total_pages = int(resp.headers.get('X-Pagination-Page-Count', current))
+        except Exception:
+            break  # fallback: if headers missing, just exit
+
+        if current >= total_pages:
+            break
+        current_page += 1
     return put_ids
+
 
 def get_put_lines(put_id):
     token = ensure_valid_token()
@@ -169,8 +184,9 @@ st.markdown(
 
 st.title("B Fashion Brands Puts Updater")
 
-# Stap 1: Login en fetch PUT lines as CSV
-st.header("Step 1: Login to fetch PUT lines")
+
+# Step 1: Login and fetch PUT lines as CSV
+st.header("Stap 1: Login om PUT lines op te halen")
 with st.form("auth_form"):
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
@@ -193,8 +209,8 @@ if submitted:
     except Exception as e:
         st.error(f"Error: {e}")
 
-# Stap 2: Upload Excel en merge
-st.header("Step 2: Upload and update your 'Check Bas' Excel file")
+# Step 2: Upload Excel and merge
+st.header("Stap 2: Upload en update 'Check Bas' Excel file")
 
 if 'csv_buffer' in st.session_state:
     excel_file = st.file_uploader("Upload 'Check Bas' Excel (.xlsx)", type=["xlsx"])
