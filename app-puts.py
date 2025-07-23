@@ -77,6 +77,10 @@ def normalize_kleurnummer(kleurnummer):
         return kleurnummer_str.zfill(3 if len(kleurnummer_str) <= 2 else 4)
     return kleurnummer_str
 
+def strip_leading_zeros(x):
+    s = str(x).lstrip('0')
+    return s if s else '0'
+
 def get_all_puts():
     token = ensure_valid_token()
     put_ids = []
@@ -176,7 +180,8 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
             return row['PUT']
 
     df_excel['PUT'] = df_excel.apply(fill_put, axis=1)
-    # Make sure Ordernr. is also output as normalized string
+    # Clean up output columns
+    df_excel['Artikelnummer'] = df_excel['Artikelnummer'].apply(strip_leading_zeros)
     df_excel['Ordernr.'] = df_excel['Ordernr.'].apply(normalize_order_number)
     return df_excel
 
