@@ -62,6 +62,13 @@ def normalize_item_number(x):
         s = s[:-2]
     return s.zfill(7) if s.isdigit() else s
 
+def normalize_order_number(x):
+    """Normalize order number as string, removing any trailing .0."""
+    s = str(x).strip()
+    if s.endswith('.0'):
+        s = s[:-2]
+    return s
+
 def normalize_kleurnummer(kleurnummer):
     kleurnummer_str = str(kleurnummer).strip()
     if kleurnummer_str.endswith('.0'):
@@ -137,20 +144,22 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
     df_csv = pd.read_csv(csv_buffer)
     df_excel.columns = [c.strip() for c in df_excel.columns]
     df_csv.columns = [c.strip() for c in df_csv.columns]
+
+    # Normalize relevant fields as strings (strip .0 etc.)
     df_csv['item_number'] = df_csv['item_number'].apply(normalize_item_number)
     df_csv['color_number'] = df_csv['color_number'].apply(normalize_kleurnummer)
-    df_csv['po_number'] = df_csv['po_number'].astype(str).str.strip()
+    df_csv['po_number'] = df_csv['po_number'].apply(normalize_order_number)
     df_excel['Artikelnummer'] = df_excel['Artikelnummer'].apply(normalize_item_number)
     df_excel['Kleurnummer'] = df_excel['Kleurnummer'].apply(normalize_kleurnummer)
-    df_excel['Ordernr.'] = df_excel['Ordernr.'].astype(str).str.strip()
+    df_excel['Ordernr.'] = df_excel['Ordernr.'].apply(normalize_order_number)
 
     # Map (po_number, item_number, color_number) -> put_id
     mapping = {}
     for _, row in df_csv.iterrows():
         key = (
-            str(row['po_number']).strip(),
-            str(row['item_number']).strip(),
-            str(row['color_number']).strip()
+            str(row['po_number']),
+            str(row['item_number']),
+            str(row['color_number'])
         )
         if key not in mapping:
             mapping[key] = str(row['put_id'])
@@ -158,15 +167,17 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
     def fill_put(row):
         if 'PUT' not in row or pd.isna(row['PUT']) or str(row['PUT']).strip() == "":
             key = (
-                str(row['Ordernr.']).strip(),
-                str(row['Artikelnummer']).strip(),
-                str(row['Kleurnummer']).strip()
+                str(row['Ordernr.']),
+                str(row['Artikelnummer']),
+                str(row['Kleurnummer'])
             )
             return mapping.get(key, "")
         else:
             return row['PUT']
 
     df_excel['PUT'] = df_excel.apply(fill_put, axis=1)
+    # Make sure Ordernr. is also output as normalized string
+    df_excel['Ordernr.'] = df_excel['Ordernr.'].apply(normalize_order_number)
     return df_excel
 
 
