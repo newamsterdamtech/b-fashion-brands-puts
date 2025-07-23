@@ -111,7 +111,7 @@ def fetch_put_lines_csv(username, password):
 
     csv_buffer = io.StringIO()
     writer = csv.writer(csv_buffer)
-    writer.writerow(["put_id", "line_id", "item_number", "color_number"])
+    writer.writerow(["put_id", "line_id", "po_number", "item_number", "color_number"])
     n_puts = len(put_ids)
     progress = st.progress(0)
     for idx, put_id in enumerate(put_ids):
@@ -122,10 +122,11 @@ def fetch_put_lines_csv(username, password):
             item = line.get("item") or {}
             color = line.get("color") or {}
             line_id = line.get("id")
+            po_number = line.get("order_id")
             item_number = str(item.get("item_number", "")).strip()
             color_number = str(color.get("color_number", "")).strip()
             writer.writerow([
-                put_id, line_id, normalize_item_number(item_number), normalize_kleurnummer(color_number)
+                put_id, line_id, po_number, normalize_item_number(item_number), normalize_kleurnummer(color_number)
             ])
         progress.progress((idx + 1) / n_puts)
     csv_buffer.seek(0)
@@ -138,22 +139,36 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
     df_csv.columns = [c.strip() for c in df_csv.columns]
     df_csv['item_number'] = df_csv['item_number'].apply(normalize_item_number)
     df_csv['color_number'] = df_csv['color_number'].apply(normalize_kleurnummer)
+    df_csv['po_number'] = df_csv['po_number'].astype(str).str.strip()
     df_excel['Artikelnummer'] = df_excel['Artikelnummer'].apply(normalize_item_number)
     df_excel['Kleurnummer'] = df_excel['Kleurnummer'].apply(normalize_kleurnummer)
-    # Map (item_number, color_number) -> put_id
+    df_excel['Ordernr.'] = df_excel['Ordernr.'].astype(str).str.strip()
+
+    # Map (po_number, item_number, color_number) -> put_id
     mapping = {}
     for _, row in df_csv.iterrows():
-        key = (str(row['item_number']), str(row['color_number']))
+        key = (
+            str(row['po_number']).strip(),
+            str(row['item_number']).strip(),
+            str(row['color_number']).strip()
+        )
         if key not in mapping:
             mapping[key] = str(row['put_id'])
+
     def fill_put(row):
         if 'PUT' not in row or pd.isna(row['PUT']) or str(row['PUT']).strip() == "":
-            key = (str(row['Artikelnummer']).strip(), str(row['Kleurnummer']).strip())
+            key = (
+                str(row['Ordernr.']).strip(),
+                str(row['Artikelnummer']).strip(),
+                str(row['Kleurnummer']).strip()
+            )
             return mapping.get(key, "")
         else:
             return row['PUT']
+
     df_excel['PUT'] = df_excel.apply(fill_put, axis=1)
     return df_excel
+
 
 # --- Streamlit UI ---
 
