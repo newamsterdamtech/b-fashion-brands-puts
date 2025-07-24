@@ -192,13 +192,13 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
     # Sum quantity for each PUT id
     received_quantity = df_csv.groupby('put_id')['quantity'].sum().astype(int).to_dict()
 
-    # Insert or update "Received Quantities" in column I (index 8)
-    col_name = "Received Quantities"
+    # Insert or update "Received Quantity" in column I (index 8)
+    col_name = "Received Quantity"
     if col_name not in df_excel.columns:
         # Insert at position 8 (column I)
         df_excel.insert(8, col_name, "")
 
-    # Fill "Received Quantities" based on PUT id
+    # Fill "Received Quantity" based on PUT id
     def get_received_qty(row):
         put_id = str(row['PUT']).strip()
         return received_quantity.get(put_id, "")
