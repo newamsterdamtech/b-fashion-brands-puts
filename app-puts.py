@@ -122,7 +122,7 @@ def fetch_put_lines_csv(username, password):
 
     csv_buffer = io.StringIO()
     writer = csv.writer(csv_buffer)
-    writer.writerow(["put_id", "line_id", "po_number", "item_number", "color_number"])
+    writer.writerow(["put_id", "line_id", "po_number", "item_number", "color_number", "quantity"])
     n_puts = len(put_ids)
     progress = st.progress(0)
     for idx, put_id in enumerate(put_ids):
@@ -136,8 +136,11 @@ def fetch_put_lines_csv(username, password):
             po_number = line.get("order_id")
             item_number = str(item.get("item_number", "")).strip()
             color_number = str(color.get("color_number", "")).strip()
+            # --- get quantity, strip decimals ---
+            raw_quantity = str(line.get("quantity", "0")).strip()
+            quantity = raw_quantity.split(".")[0] if "." in raw_quantity else raw_quantity
             writer.writerow([
-                put_id, line_id, po_number, normalize_item_number(item_number), normalize_kleurnummer(color_number)
+                put_id, line_id, po_number, normalize_item_number(item_number), normalize_kleurnummer(color_number), quantity
             ])
         progress.progress((idx + 1) / n_puts)
     csv_buffer.seek(0)
@@ -153,6 +156,8 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
     df_csv['item_number'] = df_csv['item_number'].apply(normalize_item_number)
     df_csv['color_number'] = df_csv['color_number'].apply(normalize_kleurnummer)
     df_csv['po_number'] = df_csv['po_number'].apply(normalize_order_number)
+    df_csv['put_id'] = df_csv['put_id'].astype(str).str.strip()
+    df_csv['quantity'] = pd.to_numeric(df_csv['quantity'], errors='coerce').fillna(0).astype(int)
     df_excel['Artikelnummer'] = df_excel['Artikelnummer'].apply(normalize_item_number)
     df_excel['Kleurnummer'] = df_excel['Kleurnummer'].apply(normalize_kleurnummer)
     df_excel['Ordernr.'] = df_excel['Ordernr.'].apply(normalize_order_number)
@@ -183,6 +188,23 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
     # Clean up output columns
     df_excel['Artikelnummer'] = df_excel['Artikelnummer'].apply(strip_leading_zeros)
     df_excel['Ordernr.'] = df_excel['Ordernr.'].apply(normalize_order_number)
+
+    # Sum quantity for each PUT id
+    received_quantity = df_csv.groupby('put_id')['quantity'].sum().astype(int).to_dict()
+
+    # Insert or update "Received Quantities" in column I (index 8)
+    col_name = "Received Quantities"
+    if col_name not in df_excel.columns:
+        # Insert at position 8 (column I)
+        df_excel.insert(8, col_name, "")
+
+    # Fill "Received Quantities" based on PUT id
+    def get_received_qty(row):
+        put_id = str(row['PUT']).strip()
+        return received_quantity.get(put_id, "")
+
+    df_excel[col_name] = df_excel.apply(get_received_qty, axis=1)
+
     return df_excel
 
 
