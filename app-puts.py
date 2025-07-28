@@ -201,10 +201,11 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
     received_quantity = df_csv.groupby('put_id')['quantity'].sum().astype(int).to_dict()
 
     def should_update(q):
+        # Update if NaN, empty, blank, or 0
         if pd.isna(q):
             return True
         s = str(q).strip()
-        return s == ""
+        return s == "" or s == "0"
 
     def get_received_qty(row):
         existing = row.get(col_name, "")
