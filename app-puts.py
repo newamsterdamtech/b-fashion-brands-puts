@@ -152,7 +152,6 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
     df_excel.columns = [c.strip() for c in df_excel.columns]
     df_csv.columns = [c.strip() for c in df_csv.columns]
 
-    # Normalize relevant fields as strings (strip .0 etc.)
     df_csv['item_number'] = df_csv['item_number'].apply(normalize_item_number)
     df_csv['color_number'] = df_csv['color_number'].apply(normalize_kleurnummer)
     df_csv['po_number'] = df_csv['po_number'].apply(normalize_order_number)
@@ -162,7 +161,6 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
     df_excel['Kleurnummer'] = df_excel['Kleurnummer'].apply(normalize_kleurnummer)
     df_excel['Ordernr.'] = df_excel['Ordernr.'].apply(normalize_order_number)
 
-    # Map (po_number, item_number, color_number) -> put_id
     mapping = {}
     for _, row in df_csv.iterrows():
         key = (
@@ -185,27 +183,35 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
             return row['PUT']
 
     df_excel['PUT'] = df_excel.apply(fill_put, axis=1)
-    # Clean up output columns
     df_excel['Artikelnummer'] = df_excel['Artikelnummer'].apply(strip_leading_zeros)
     df_excel['Ordernr.'] = df_excel['Ordernr.'].apply(normalize_order_number)
 
-    # Sum quantity for each PUT id
     received_quantity = df_csv.groupby('put_id')['quantity'].sum().astype(int).to_dict()
 
-    # Insert or update "Received Quantity" in column I (index 8)
-    col_name = "Received Quantity"
+    # Prepare "Received Quantities" col (column I, index 8)
+    col_name = "Received Quantities"
     if col_name not in df_excel.columns:
-        # Insert at position 8 (column I)
         df_excel.insert(8, col_name, "")
 
-    # Fill "Received Quantity" based on PUT id
+    def should_update(q):
+        # Consider empty if NaN, blank, or just whitespace
+        if pd.isna(q):
+            return True
+        s = str(q).strip()
+        return s == ""
+
     def get_received_qty(row):
-        put_id = str(row['PUT']).strip()
-        return received_quantity.get(put_id, "")
+        existing = row.get(col_name, "")
+        if should_update(existing):
+            put_id = str(row['PUT']).strip()
+            return received_quantity.get(put_id, "")
+        else:
+            return existing
 
     df_excel[col_name] = df_excel.apply(get_received_qty, axis=1)
 
     return df_excel
+
 
 
 # --- Streamlit UI ---
