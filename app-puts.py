@@ -186,15 +186,21 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
     df_excel['Artikelnummer'] = df_excel['Artikelnummer'].apply(strip_leading_zeros)
     df_excel['Ordernr.'] = df_excel['Ordernr.'].apply(normalize_order_number)
 
-    received_quantity = df_csv.groupby('put_id')['quantity'].sum().astype(int).to_dict()
-
-    # Prepare "Received Quantities" col (column I, index 8)
-    col_name = "Received Quantities"
-    if col_name not in df_excel.columns:
+    # Use the input column name exactly as in the input file
+    # Default to 'Received Quantity' if present, otherwise try 'Received Quantities'
+    col_name = None
+    for possible in ['Received Quantity', 'Received Quantities']:
+        if possible in df_excel.columns:
+            col_name = possible
+            break
+    if not col_name:
+        # Default to singular and add if missing
+        col_name = 'Received Quantity'
         df_excel.insert(8, col_name, "")
 
+    received_quantity = df_csv.groupby('put_id')['quantity'].sum().astype(int).to_dict()
+
     def should_update(q):
-        # Consider empty if NaN, blank, or just whitespace
         if pd.isna(q):
             return True
         s = str(q).strip()
@@ -211,8 +217,6 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
     df_excel[col_name] = df_excel.apply(get_received_qty, axis=1)
 
     return df_excel
-
-
 
 # --- Streamlit UI ---
 
