@@ -57,10 +57,13 @@ def safe_get(url, headers, params=None, log_text=None):
         return resp
 
 def normalize_item_number(x):
+    # Converts to string, strips .0, then removes leading zeros
     s = str(x).strip()
     if s.endswith('.0'):
         s = s[:-2]
-    return s.zfill(7) if s.isdigit() else s
+    s = s.lstrip('0')
+    return s if s else '0'
+
 
 def normalize_order_number(x):
     """Normalize order number as string, removing any trailing .0."""
@@ -152,6 +155,7 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
     df_excel.columns = [c.strip() for c in df_excel.columns]
     df_csv.columns = [c.strip() for c in df_csv.columns]
 
+    # Normalize: Artikelnummer/item_number as plain string with no leading zeros
     df_csv['item_number'] = df_csv['item_number'].apply(normalize_item_number)
     df_csv['color_number'] = df_csv['color_number'].apply(normalize_kleurnummer)
     df_csv['po_number'] = df_csv['po_number'].apply(normalize_order_number)
@@ -165,7 +169,7 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
     for _, row in df_csv.iterrows():
         key = (
             str(row['po_number']),
-            str(row['item_number']),
+            str(row['item_number']),      # "5990" always, never "0005990"
             str(row['color_number'])
         )
         if key not in mapping:
@@ -187,21 +191,18 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
     df_excel['Ordernr.'] = df_excel['Ordernr.'].apply(normalize_order_number)
 
     # Use the input column name exactly as in the input file
-    # Default to 'Received Quantity' if present, otherwise try 'Received Quantities'
     col_name = None
     for possible in ['Received Quantity', 'Received Quantities']:
         if possible in df_excel.columns:
             col_name = possible
             break
     if not col_name:
-        # Default to singular and add if missing
         col_name = 'Received Quantity'
         df_excel.insert(8, col_name, "")
 
     received_quantity = df_csv.groupby('put_id')['quantity'].sum().astype(int).to_dict()
 
     def should_update(q):
-        # Update if NaN, empty, blank, or 0
         if pd.isna(q):
             return True
         s = str(q).strip()
@@ -218,6 +219,7 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
     df_excel[col_name] = df_excel.apply(get_received_qty, axis=1)
 
     return df_excel
+
 
 # --- Streamlit UI ---
 
