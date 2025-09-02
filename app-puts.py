@@ -41,13 +41,13 @@ def handle_rate_limits(resp):
     if marbles >= bucket_size - 2 or remaining <= 2:
         calculated_wait = (marbles - remaining + 2) * 4
         wait_time = min(max(calculated_wait, 1), MAX_RATE_LIMIT_SLEEP)
-        print(f"[handle_rate_limits] Bucket full/near. Sleeping {wait_time}s (calculated {calculated_wait}s).")
+        print(f"[handle_rate_limits] Bucket near/full. Sleeping {wait_time}s (calc {calculated_wait}s).")
         time.sleep(wait_time)
     return
 
 def safe_get(url, headers, params=None, log_text=None):
     while True:
-        print(f"[safe_get] Making API call: {url} params={params}")
+        print(f"[safe_get] {log_text or ''} -> {url} params={params}")
         resp = requests.get(url, headers=headers, params=params)
         if resp.status_code == 429:
             print("[safe_get] 429 received. Sleeping 3 seconds before retry.")
@@ -56,33 +56,37 @@ def safe_get(url, headers, params=None, log_text=None):
         handle_rate_limits(resp)
         return resp
 
+# ---- Normalizers: keep matching robust & output pretty ----
+
+def normalize_order_number(x):
+    """Stringify, strip spaces, remove trailing .0"""
+    s = str(x).strip()
+    if s.endswith('.0'):
+        s = s[:-2]
+    return s
+
 def normalize_item_number(x):
-    # Converts to string, strips .0, then removes leading zeros
+    """Stringify, remove trailing .0, then strip leading zeros (API '0005990' -> '5990')."""
     s = str(x).strip()
     if s.endswith('.0'):
         s = s[:-2]
     s = s.lstrip('0')
     return s if s else '0'
 
-
-def normalize_order_number(x):
-    """Normalize order number as string, removing any trailing .0."""
-    s = str(x).strip()
+def normalize_kleurnummer(kleurnummer):
+    """Pad to 3 or 4 digits as your sheet expects, but also remove trailing .0 if present."""
+    s = str(kleurnummer).strip()
     if s.endswith('.0'):
         s = s[:-2]
+    if s.isdigit():
+        return s.zfill(3 if len(s) <= 2 else 4)
     return s
-
-def normalize_kleurnummer(kleurnummer):
-    kleurnummer_str = str(kleurnummer).strip()
-    if kleurnummer_str.endswith('.0'):
-        kleurnummer_str = kleurnummer_str[:-2]
-    if kleurnummer_str.isdigit():
-        return kleurnummer_str.zfill(3 if len(kleurnummer_str) <= 2 else 4)
-    return kleurnummer_str
 
 def strip_leading_zeros(x):
     s = str(x).lstrip('0')
     return s if s else '0'
+
+# ---- API fetchers with pagination ----
 
 def get_all_puts():
     token = ensure_valid_token()
@@ -91,23 +95,21 @@ def get_all_puts():
     while True:
         url = f"{BASE_URL}/puts?status=0&limit=1000&page={current_page}"
         headers = {"Authorization": f"Bearer {token}"}
-        resp = safe_get(url, headers, log_text=f"[GET] /puts?status=0&limit=1000&page={current_page}")
+        resp = safe_get(url, headers, log_text=f"[GET] /puts page {current_page}")
         resp.raise_for_status()
         data = resp.json()
         put_ids.extend([put["id"] for put in data if "id" in put])
 
-        # Handle pagination via response headers
         try:
             current = int(resp.headers.get('X-Pagination-Current-Page', current_page))
             total_pages = int(resp.headers.get('X-Pagination-Page-Count', current))
         except Exception:
-            break  # fallback: if headers missing, just exit
+            break  # if headers missing, assume single page
 
         if current >= total_pages:
             break
         current_page += 1
     return put_ids
-
 
 def get_put_lines(put_id):
     token = ensure_valid_token()
@@ -116,6 +118,8 @@ def get_put_lines(put_id):
     resp = safe_get(url, headers, log_text=f"[GET] /puts/{put_id}/lines")
     resp.raise_for_status()
     return resp.json()
+
+# ---- Build CSV buffer with line quantities (integer strings) ----
 
 def fetch_put_lines_csv(username, password):
     st.session_state["username"] = username
@@ -126,11 +130,11 @@ def fetch_put_lines_csv(username, password):
     csv_buffer = io.StringIO()
     writer = csv.writer(csv_buffer)
     writer.writerow(["put_id", "line_id", "po_number", "item_number", "color_number", "quantity"])
+
     n_puts = len(put_ids)
     progress = st.progress(0)
     for idx, put_id in enumerate(put_ids):
-        log_msg = f"Processing PUT {idx+1}/{n_puts} (PUT ID: {put_id})"
-        print(log_msg)
+        print(f"Processing PUT {idx+1}/{n_puts} (PUT ID: {put_id})")
         lines = get_put_lines(put_id)
         for line in lines:
             item = line.get("item") or {}
@@ -139,58 +143,79 @@ def fetch_put_lines_csv(username, password):
             po_number = line.get("order_id")
             item_number = str(item.get("item_number", "")).strip()
             color_number = str(color.get("color_number", "")).strip()
-            # --- get quantity, strip decimals ---
+
+            # quantity: strip decimals (e.g. '79.00' -> '79')
             raw_quantity = str(line.get("quantity", "0")).strip()
             quantity = raw_quantity.split(".")[0] if "." in raw_quantity else raw_quantity
+
             writer.writerow([
-                put_id, line_id, po_number, normalize_item_number(item_number), normalize_kleurnummer(color_number), quantity
+                put_id,
+                line_id,
+                po_number,
+                normalize_item_number(item_number),
+                normalize_kleurnummer(color_number),
+                quantity
             ])
-        progress.progress((idx + 1) / n_puts)
+        progress.progress((idx + 1) / max(n_puts, 1))
     csv_buffer.seek(0)
     return csv_buffer
+
+# ---- Merge into Excel ----
 
 def merge_put_lines_to_excel(excel_file, csv_buffer):
     df_excel = pd.read_excel(excel_file)
     df_csv = pd.read_csv(csv_buffer)
+
+    # Clean headers
     df_excel.columns = [c.strip() for c in df_excel.columns]
     df_csv.columns = [c.strip() for c in df_csv.columns]
 
-    # Normalize: Artikelnummer/item_number as plain string with no leading zeros
+    # Normalize CSV fields
+    df_csv['put_id']      = df_csv['put_id'].apply(normalize_order_number)
+    df_csv['po_number']   = df_csv['po_number'].apply(normalize_order_number)
     df_csv['item_number'] = df_csv['item_number'].apply(normalize_item_number)
-    df_csv['color_number'] = df_csv['color_number'].apply(normalize_kleurnummer)
-    df_csv['po_number'] = df_csv['po_number'].apply(normalize_order_number)
-    df_csv['put_id'] = df_csv['put_id'].astype(str).str.strip()
-    df_csv['quantity'] = pd.to_numeric(df_csv['quantity'], errors='coerce').fillna(0).astype(int)
-    df_excel['Artikelnummer'] = df_excel['Artikelnummer'].apply(normalize_item_number)
-    df_excel['Kleurnummer'] = df_excel['Kleurnummer'].apply(normalize_kleurnummer)
-    df_excel['Ordernr.'] = df_excel['Ordernr.'].apply(normalize_order_number)
+    df_csv['color_number']= df_csv['color_number'].apply(normalize_kleurnummer)
+    df_csv['quantity']    = pd.to_numeric(df_csv['quantity'], errors='coerce').fillna(0).astype(int)
 
+    # Normalize Excel fields (for matching & nice output)
+    if 'PUT' in df_excel.columns:
+        df_excel['PUT'] = df_excel['PUT'].apply(normalize_order_number)
+    if 'Ordernr.' in df_excel.columns:
+        df_excel['Ordernr.'] = df_excel['Ordernr.'].apply(normalize_order_number)
+    if 'Artikelnummer' in df_excel.columns:
+        df_excel['Artikelnummer'] = df_excel['Artikelnummer'].apply(normalize_item_number)
+    if 'Kleurnummer' in df_excel.columns:
+        df_excel['Kleurnummer'] = df_excel['Kleurnummer'].apply(normalize_kleurnummer)
+
+    # Build 3-key mapping: (po_number, item_number, color_number) -> put_id
     mapping = {}
     for _, row in df_csv.iterrows():
-        key = (
-            str(row['po_number']),
-            str(row['item_number']),      # "5990" always, never "0005990"
-            str(row['color_number'])
-        )
+        key = (str(row['po_number']), str(row['item_number']), str(row['color_number']))
         if key not in mapping:
             mapping[key] = str(row['put_id'])
 
+    # Fill PUT if empty
     def fill_put(row):
         if 'PUT' not in row or pd.isna(row['PUT']) or str(row['PUT']).strip() == "":
-            key = (
-                str(row['Ordernr.']),
-                str(row['Artikelnummer']),
-                str(row['Kleurnummer'])
-            )
+            key = (str(row.get('Ordernr.', '')).strip(),
+                   str(row.get('Artikelnummer', '')).strip(),
+                   str(row.get('Kleurnummer', '')).strip())
             return mapping.get(key, "")
         else:
             return row['PUT']
 
     df_excel['PUT'] = df_excel.apply(fill_put, axis=1)
-    df_excel['Artikelnummer'] = df_excel['Artikelnummer'].apply(strip_leading_zeros)
-    df_excel['Ordernr.'] = df_excel['Ordernr.'].apply(normalize_order_number)
 
-    # Use the input column name exactly as in the input file
+    # Pretty output: Artikelnummer without leading zeros; Ordernr. without trailing .0
+    if 'Artikelnummer' in df_excel.columns:
+        df_excel['Artikelnummer'] = df_excel['Artikelnummer'].apply(strip_leading_zeros)
+    if 'Ordernr.' in df_excel.columns:
+        df_excel['Ordernr.'] = df_excel['Ordernr.'].apply(normalize_order_number)
+
+    # Sum quantities PER PUT id
+    received_quantity = df_csv.groupby('put_id')['quantity'].sum().astype(int).to_dict()
+
+    # Find or create the column for received quantities
     col_name = None
     for possible in ['Received Quantity', 'Received Quantities']:
         if possible in df_excel.columns:
@@ -198,28 +223,27 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
             break
     if not col_name:
         col_name = 'Received Quantity'
-        df_excel.insert(8, col_name, "")
+        # Insert at column I (index 8) if possible
+        insert_at = 8 if 0 <= 8 <= len(df_excel.columns) else len(df_excel.columns)
+        df_excel.insert(insert_at, col_name, "")
 
-    received_quantity = df_csv.groupby('put_id')['quantity'].sum().astype(int).to_dict()
-
+    # Logic: update only if blank/empty/NaN or 0
     def should_update(q):
         if pd.isna(q):
             return True
         s = str(q).strip()
-        return s == "" or s == "0"
+        return s in ("", "0", "0.0")
 
     def get_received_qty(row):
         existing = row.get(col_name, "")
         if should_update(existing):
-            put_id = str(row['PUT']).strip()
-            return received_quantity.get(put_id, "")
-        else:
-            return existing
+            put_id_key = str(row.get('PUT', '')).strip()  # already normalized
+            return received_quantity.get(put_id_key, existing)
+        return existing
 
     df_excel[col_name] = df_excel.apply(get_received_qty, axis=1)
 
     return df_excel
-
 
 # --- Streamlit UI ---
 
@@ -250,7 +274,6 @@ st.markdown(
 
 st.title("B Fashion Brands Puts Updater")
 
-
 # Step 1: Login and fetch PUT lines as CSV
 st.header("Stap 1: Login om PUT lines op te halen")
 with st.form("auth_form"):
@@ -265,7 +288,6 @@ if submitted:
             csv_buffer = fetch_put_lines_csv(username, password)
             st.success("PUT lines fetched successfully! Proceed to upload your 'Check Bas' Excel file.")
             st.session_state['csv_buffer'] = csv_buffer.getvalue()
-            # ---- DOWNLOAD BUTTON FOR CSV BUFFER ----
             st.download_button(
                 label="Download PUT lines as CSV",
                 data=st.session_state['csv_buffer'],
