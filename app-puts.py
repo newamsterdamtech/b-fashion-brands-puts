@@ -235,10 +235,12 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
         return s in ("", "0", "0.0")
 
     def get_received_qty(row):
-        existing = row.get(col_name, "")
-        if should_update(existing):
-            put_id_key = str(row.get('PUT', '')).strip()  # already normalized
-            return received_quantity.get(put_id_key, existing)
+    existing = row.get(col_name, "")
+    if should_update(existing):
+        put_id = str(row['PUT']).strip()
+        # Return empty string if no match instead of NaN
+        return str(received_quantity.get(put_id, "")) if put_id in received_quantity else ""
+    else:
         return existing
 
     df_excel[col_name] = df_excel.apply(get_received_qty, axis=1)
