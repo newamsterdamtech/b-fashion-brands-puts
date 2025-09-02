@@ -56,7 +56,7 @@ def safe_get(url, headers, params=None, log_text=None):
         handle_rate_limits(resp)
         return resp
 
-# ---- Normalizers: keep matching robust & output pretty ----
+# ---- Normalizers ----
 
 def normalize_order_number(x):
     """Stringify, strip spaces, remove trailing .0"""
@@ -223,7 +223,6 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
             break
     if not col_name:
         col_name = 'Received Quantity'
-        # Insert at column I (index 8) if possible
         insert_at = 8 if 0 <= 8 <= len(df_excel.columns) else len(df_excel.columns)
         df_excel.insert(insert_at, col_name, "")
 
@@ -237,15 +236,16 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
     def get_received_qty(row):
         existing = row.get(col_name, "")
         if should_update(existing):
-            put_id = str(row['PUT']).strip()
-            # Return empty string if no match instead of NaN
-            return str(received_quantity.get(put_id, "")) if put_id in received_quantity else ""
-        else:
-            return existing
+            put_id_key = str(row.get('PUT', '')).strip()  # already normalized
+            # Return empty string if no sum exists for this PUT id
+            return str(received_quantity.get(put_id_key, "")) if put_id_key in received_quantity else ""
+        return existing
 
-        df_excel[col_name] = df_excel.apply(get_received_qty, axis=1)
+    df_excel[col_name] = df_excel.apply(get_received_qty, axis=1)
+    # Ensure no literal 'nan' strings show up
+    df_excel[col_name] = df_excel[col_name].replace({pd.NA: "", None: "", "nan": ""})
 
-        return df_excel
+    return df_excel
 
 # --- Streamlit UI ---
 
@@ -309,18 +309,22 @@ if 'csv_buffer' in st.session_state:
         try:
             with st.spinner("Processing Excel file..."):
                 df_updated = merge_put_lines_to_excel(excel_file, csv_buffer)
-            st.success("Excel updated! Download your file below.")
-            st.dataframe(df_updated.head())
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df_updated.to_excel(writer, index=False)
-            output.seek(0)
-            st.download_button(
-                label="Download Updated Excel",
-                data=output,
-                file_name="check_bas_updated.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+
+            if isinstance(df_updated, pd.DataFrame) and not df_updated.empty:
+                st.success("Excel updated! Download your file below.")
+                st.dataframe(df_updated.head())
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    df_updated.to_excel(writer, index=False)
+                output.seek(0)
+                st.download_button(
+                    label="Download Updated Excel",
+                    data=output,
+                    file_name="check_bas_updated.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            else:
+                st.error("Processing produced no data. Please check your inputs.")
         except Exception as e:
             st.error(f"Error updating Excel file: {e}")
 else:
