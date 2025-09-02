@@ -59,7 +59,9 @@ def safe_get(url, headers, params=None, log_text=None):
 # ---- Normalizers ----
 
 def normalize_order_number(x):
-    """Stringify, strip spaces, remove trailing .0"""
+    # Treat NaN/None as empty and avoid turning them into "nan"
+    if x is None or (isinstance(x, float) and pd.isna(x)) or (isinstance(x, str) and x.strip().lower() in ("", "nan", "none")):
+        return ""
     s = str(x).strip()
     if s.endswith('.0'):
         s = s[:-2]
@@ -180,6 +182,9 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
     # Normalize Excel fields (for matching & nice output)
     if 'PUT' in df_excel.columns:
         df_excel['PUT'] = df_excel['PUT'].apply(normalize_order_number)
+        # ensure no literal 'nan' strings or real NaNs
+        df_excel['PUT'] = df_excel['PUT'].replace({"nan": "", "NaN": "", None: ""}).fillna("")
+
     if 'Ordernr.' in df_excel.columns:
         df_excel['Ordernr.'] = df_excel['Ordernr.'].apply(normalize_order_number)
     if 'Artikelnummer' in df_excel.columns:
@@ -196,15 +201,18 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
 
     # Fill PUT if empty
     def fill_put(row):
-        if 'PUT' not in row or pd.isna(row['PUT']) or str(row['PUT']).strip() == "":
-            key = (str(row.get('Ordernr.', '')).strip(),
-                   str(row.get('Artikelnummer', '')).strip(),
-                   str(row.get('Kleurnummer', '')).strip())
+        val = row.get('PUT', "")
+        if pd.isna(val) or str(val).strip() in ("", "nan", "NaN"):
+            key = (
+                str(row.get('Ordernr.', '')).strip(),
+                str(row.get('Artikelnummer', '')).strip(),
+                str(row.get('Kleurnummer', '')).strip()
+            )
             return mapping.get(key, "")
-        else:
-            return row['PUT']
+        return val
 
     df_excel['PUT'] = df_excel.apply(fill_put, axis=1)
+    df_excel['PUT'] = df_excel['PUT'].replace({"nan": "", "NaN": "", None: ""}).fillna("")
 
     # Pretty output: Artikelnummer without leading zeros; Ordernr. without trailing .0
     if 'Artikelnummer' in df_excel.columns:
