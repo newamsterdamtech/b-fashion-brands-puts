@@ -235,17 +235,17 @@ def merge_put_lines_to_excel(excel_file, csv_buffer):
         return s in ("", "0", "0.0")
 
     def get_received_qty(row):
-    existing = row.get(col_name, "")
-    if should_update(existing):
-        put_id = str(row['PUT']).strip()
-        # Return empty string if no match instead of NaN
-        return str(received_quantity.get(put_id, "")) if put_id in received_quantity else ""
-    else:
-        return existing
+        existing = row.get(col_name, "")
+        if should_update(existing):
+            put_id = str(row['PUT']).strip()
+            # Return empty string if no match instead of NaN
+            return str(received_quantity.get(put_id, "")) if put_id in received_quantity else ""
+        else:
+            return existing
 
-    df_excel[col_name] = df_excel.apply(get_received_qty, axis=1)
+        df_excel[col_name] = df_excel.apply(get_received_qty, axis=1)
 
-    return df_excel
+        return df_excel
 
 # --- Streamlit UI ---
 
